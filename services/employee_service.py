@@ -256,6 +256,16 @@ async def delete_employee(company_id: str, employee_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 async def export_employees(company_id: str, filters: Optional[Dict[str, Any]] = None):
+    """
+    Export employees to Excel with properly maintained formulas.
+    
+    Args:
+        company_id: ID of the company
+        filters: Optional filters to apply to the query
+        
+    Returns:
+        BytesIO stream containing the Excel file
+    """
     # Validate company exists
     company = await get_company_collection().find_one({"_id": ObjectId(company_id)})
     if not company:
@@ -274,6 +284,70 @@ async def export_employees(company_id: str, filters: Optional[Dict[str, Any]] = 
     # Get formula mapping if available
     formula_mapping = company.get("salary_sheet_formulas", {})
     
+    # If no formulas are available, try to infer them based on the column names
+    if not formula_mapping:
+        # Define default formulas for common calculated fields
+        default_formulas = {}
+        
+        # Get column indices for reference
+        column_indices = {col.lower(): idx for idx, col in enumerate(columns)}
+        
+        # Attempt to identify key columns
+        basic_pay_idx = next((idx for col, idx in column_indices.items() if "basic pay" in col), None)
+        hra_idx = next((idx for col, idx in column_indices.items() if "hra" in col), None)
+        
+        # Gross Amount = sum of all compensation components
+        gross_amount_idx = next((idx for col, idx in column_indices.items() 
+                             if "gross" in col and "amount" in col), None)
+        
+        # Total Deductions = sum of all deduction components
+        total_ded_idx = next((idx for col, idx in column_indices.items() 
+                          if "total" in col and "ded" in col), None)
+        
+        # Net Amount = Gross Amount - Total Deductions
+        net_amt_idx = next((idx for col, idx in column_indices.items() 
+                         if "net" in col and "amt" in col), None)
+        
+        if gross_amount_idx is not None:
+            # Find all allowance columns
+            allowance_cols = []
+            for col, idx in column_indices.items():
+                if any(term in col for term in ["basic", "hra", "allow", "education", "reimb", "lta", 
+                                               "medical", "attire", "sp.all"]):
+                    # Make sure this isn't the gross amount itself
+                    if idx != gross_amount_idx:
+                        col_name = columns[idx]
+                        col_letter = get_column_letter(idx + 1)  # +1 because Excel is 1-indexed
+                        allowance_cols.append(f"{col_letter}{{row}}")
+            
+            if allowance_cols:
+                gross_col_name = columns[gross_amount_idx]
+                default_formulas[gross_col_name] = "=" + "+".join(allowance_cols)
+        
+        if total_ded_idx is not None:
+            # Find all deduction columns
+            deduction_cols = []
+            for col, idx in column_indices.items():
+                if any(term in col for term in ["tax", "tds", "p. f", "pf", "esic", "advance", "deduction"]):
+                    # Make sure this isn't the total deduction itself
+                    if idx != total_ded_idx:
+                        col_name = columns[idx]
+                        col_letter = get_column_letter(idx + 1)
+                        deduction_cols.append(f"{col_letter}{{row}}")
+            
+            if deduction_cols:
+                total_ded_col_name = columns[total_ded_idx]
+                default_formulas[total_ded_col_name] = "=" + "+".join(deduction_cols)
+        
+        if gross_amount_idx is not None and total_ded_idx is not None and net_amt_idx is not None:
+            gross_col_letter = get_column_letter(gross_amount_idx + 1)
+            ded_col_letter = get_column_letter(total_ded_idx + 1)
+            net_amt_col_name = columns[net_amt_idx]
+            
+            default_formulas[net_amt_col_name] = f"={gross_col_letter}{{row}}-{ded_col_letter}{{row}}"
+        
+        formula_mapping = default_formulas
+    
     # Fetch employees
     cursor = get_employee_collection().find(query)
     employees = await cursor.to_list(length=None)  # Get all matching employees
@@ -283,6 +357,9 @@ async def export_employees(company_id: str, filters: Optional[Dict[str, Any]] = 
     
     # Clean NaN values
     employees = clean_nan_values(employees)
+    
+    # Import the column letter function
+    from openpyxl.utils import get_column_letter
     
     # Generate Excel with the company's format and formulas
     try:
@@ -298,4 +375,3 @@ async def export_employees(company_id: str, filters: Optional[Dict[str, Any]] = 
             status_code=500, 
             detail=f"Error generating Excel: {str(e)}"
         )
-

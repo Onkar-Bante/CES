@@ -54,13 +54,12 @@ def clean_columns(columns):
     return cleaned
 
     
-async def extract_formulas_from_excel(file: UploadFile, header_row_index=2) -> dict:
+async def extract_formulas_from_excel(file: UploadFile) -> dict:
     """
-    Extract Excel formulas from an uploaded file.
+    Extract Excel formulas from an uploaded file with improved detection.
     
     Args:
         file: Uploaded Excel file
-        header_row_index: Index of the header row (default is 2 for row 3)
         
     Returns:
         Dictionary mapping column names to formula templates
@@ -70,6 +69,13 @@ async def extract_formulas_from_excel(file: UploadFile, header_row_index=2) -> d
         contents = await file.read()
         file.file.seek(0)  # Reset file pointer
         
+        # First detect the header row
+        header_info = await extract_columns_from_excel(file)
+        header_row_index = header_info["header_row_index"]
+        columns = header_info["columns"]
+        
+        file.file.seek(0)  # Reset file pointer again
+        
         # Use openpyxl to read the workbook with formulas
         from openpyxl import load_workbook
         
@@ -77,27 +83,145 @@ async def extract_formulas_from_excel(file: UploadFile, header_row_index=2) -> d
         workbook = load_workbook(excel_file, data_only=False)
         sheet = workbook.active
         
-        # Get headers (assumed to be at header_row_index, typically row 3)
+        # Get headers using the detected header row
         headers = {}
         for col_idx in range(1, sheet.max_column + 1):
             cell = sheet.cell(row=header_row_index + 1, column=col_idx)
             if cell.value:
                 headers[col_idx] = str(cell.value).strip()
         
-        # Check for formulas in the first data row (header_row_index + 1)
+        # Look for formulas in the first few data rows (try multiple rows to ensure we find formulas)
         formulas = {}
-        first_data_row = header_row_index + 2  # Usually row 4
         
-        for col_idx in range(1, sheet.max_column + 1):
-            if col_idx in headers:
-                cell = sheet.cell(row=first_data_row, column=col_idx)
-                if cell.data_type == 'f' and cell.value and cell.value.startswith('='):
-                    formula = cell.value
+        # Check up to 5 rows after the header row to find formulas
+        for data_row in range(header_row_index + 2, min(header_row_index + 7, sheet.max_row + 1)):
+            for col_idx, header in headers.items():
+                cell = sheet.cell(row=data_row, column=col_idx)
+                if cell.data_type == 'f' and cell.value and str(cell.value).startswith('='):
+                    formula = str(cell.value)
                     # Replace the specific row number with {row} template
-                    formula = formula.replace(str(first_data_row), "{row}")
-                    formulas[headers[col_idx]] = formula
+                    formula = formula.replace(str(data_row), "{row}")
+                    
+                    # Don't overwrite if we already found a formula for this column
+                    if header not in formulas:
+                        formulas[header] = formula
+        
+        # If we didn't find any formulas, try to infer common ones based on column names
+        if not formulas:
+            # First identify potential formula columns (e.g., "gross amount", "total ded", "net amt")
+            calculated_columns = [
+                col for col in columns 
+                if any(term in col.lower() for term in [
+                    "gross", "total", "net", "payable", "deduction", "subtotal", "sum"
+                ])
+            ]
+            
+            # For each potential formula column, create a basic formula
+            for col in calculated_columns:
+                col_lower = col.lower()
+                
+                # Find the column index
+                col_idx = None
+                for idx, header in headers.items():
+                    if header.lower() == col_lower:
+                        col_idx = idx
+                        break
+                
+                if not col_idx:
+                    continue
+                
+                # Get the column letter
+                col_letter = sheet.cell(row=1, column=col_idx).column_letter
+                
+                # Create formulas based on column name patterns
+                if "gross" in col_lower and "amount" in col_lower:
+                    # For "Gross Amount": sum of basic pay + HRA + allowances
+                    input_cols = [c for c in columns if any(
+                        term in c.lower() for term in [
+                            "basic", "hra", "allow", "reimb", "conv", "lta", "medical", "education"
+                        ]
+                    )]
+                    
+                    if input_cols:
+                        # Find column letters for input columns
+                        input_letters = []
+                        for input_col in input_cols:
+                            for idx, header in headers.items():
+                                if header.lower() == input_col.lower():
+                                    letter = sheet.cell(row=1, column=idx).column_letter
+                                    input_letters.append(f"{letter}{{row}}")
+                                    break
+                        
+                        if input_letters:
+                            formulas[col] = "=" + "+".join(input_letters)
+                
+                elif "total" in col_lower and "ded" in col_lower:
+                    # For "Total Ded": sum of tax + deductions
+                    deduction_cols = [c for c in columns if any(
+                        term in c.lower() for term in [
+                            "tax", "tds", "esic", "p.f", "pf", "advance", "deduction"
+                        ]
+                    )]
+                    
+                    if deduction_cols:
+                        # Find column letters for deduction columns
+                        deduction_letters = []
+                        for deduct_col in deduction_cols:
+                            for idx, header in headers.items():
+                                if header.lower() == deduct_col.lower():
+                                    letter = sheet.cell(row=1, column=idx).column_letter
+                                    deduction_letters.append(f"{letter}{{row}}")
+                                    break
+                        
+                        if deduction_letters:
+                            formulas[col] = "=" + "+".join(deduction_letters)
+                
+                elif "net" in col_lower and "amt" in col_lower:
+                    # For "Net Amt": Gross Amount - Total Deductions
+                    gross_col = next((c for c in columns if "gross" in c.lower() and "amount" in c.lower()), None)
+                    total_ded_col = next((c for c in columns if "total" in c.lower() and "ded" in c.lower()), None)
+                    
+                    if gross_col and total_ded_col:
+                        gross_letter = None
+                        ded_letter = None
+                        
+                        for idx, header in headers.items():
+                            if header.lower() == gross_col.lower():
+                                gross_letter = sheet.cell(row=1, column=idx).column_letter
+                            elif header.lower() == total_ded_col.lower():
+                                ded_letter = sheet.cell(row=1, column=idx).column_letter
+                        
+                        if gross_letter and ded_letter:
+                            formulas[col] = f"={gross_letter}{{row}}-{ded_letter}{{row}}"
+                
+                elif "payable" in col_lower:
+                    # For "Payable": Net Amt + Other Reimbursements + Bonus
+                    net_col = next((c for c in columns if "net" in c.lower() and "amt" in c.lower()), None)
+                    bonus_cols = [c for c in columns if any(
+                        term in c.lower() for term in ["bonus", "reimbursement", "other"]
+                    )]
+                    
+                    if net_col:
+                        net_letter = None
+                        for idx, header in headers.items():
+                            if header.lower() == net_col.lower():
+                                net_letter = sheet.cell(row=1, column=idx).column_letter
+                                break
+                        
+                        formula_parts = [f"{net_letter}{{row}}"]
+                        
+                        for bonus_col in bonus_cols:
+                            for idx, header in headers.items():
+                                if header.lower() == bonus_col.lower():
+                                    letter = sheet.cell(row=1, column=idx).column_letter
+                                    formula_parts.append(f"{letter}{{row}}")
+                                    break
+                        
+                        if formula_parts:
+                            formulas[col] = "=" + "+".join(formula_parts)
         
         return formulas
         
     except Exception as e:
+        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Error extracting formulas: {str(e)}")

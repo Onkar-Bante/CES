@@ -1,37 +1,133 @@
 # utils/excel_utils.py
+
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
 from io import BytesIO
-from datetime import datetime
-import calendar
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils.dataframe import dataframe_to_rows
+import json
+import math
 
-def validate_excel_columns(actual_cols, expected_cols):
-    def norm(c): return c.strip().lower()
-    actual_norm = [norm(c) for c in actual_cols]
-    expected_norm = [norm(c) for c in expected_cols]
-    return set(actual_norm) == set(expected_norm)
-
+def validate_excel_columns(actual_columns, expected_columns):
+    """Validate that all expected columns are present in the actual columns."""
+    # Normalize column names for comparison (lowercase, strip whitespace)
+    normalized_actual = [col.lower().strip() for col in actual_columns]
+    normalized_expected = [col.lower().strip() for col in expected_columns]
+    
+    # Check if all expected columns are present
+    return all(exp in normalized_actual for exp in normalized_expected)
 
 def generate_excel_template(columns):
-    df = pd.DataFrame(columns=columns)
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
-        
-        # Get the worksheet
-        worksheet = writer.sheets['Sheet1']
-        
-        # Format header row
-        for idx, col in enumerate(columns, 1):
-            cell = worksheet.cell(row=1, column=idx)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal='center')
-            cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
-            
-            # Auto-adjust column width based on content
-            worksheet.column_dimensions[cell.column_letter].width = max(15, len(col) + 2)
+    """Generate an empty Excel template with the specified columns."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Salary Sheet Template"
     
+    # Add title row
+    ws.merge_cells('A1:F1')
+    ws['A1'] = "Salary Sheet Template"
+    ws['A1'].font = Font(bold=True, size=14)
+    ws['A1'].alignment = Alignment(horizontal="center", vertical="center")
+    
+    # Add instructions row
+    ws.merge_cells('A2:F2')
+    ws['A2'] = "Fill in employee data below. All columns are required."
+    ws['A2'].font = Font(italic=True)
+    ws['A2'].alignment = Alignment(horizontal="center", vertical="center")
+    
+    # Add headers
+    header_row = 3
+    for col_idx, column in enumerate(columns, start=1):
+        cell = ws.cell(row=header_row, column=col_idx, value=column)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+        
+        # Set column width based on column name length
+        ws.column_dimensions[chr(64 + col_idx)].width = max(len(column) + 5, 15)
+    
+    # Add sample row formatting
+    sample_row = header_row + 1
+    for col_idx in range(1, len(columns) + 1):
+        ws.cell(row=sample_row, column=col_idx)
+    
+    # Save to stream
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+def generate_sample_template(columns, company_name):
+    """Generate a sample Excel template with example data."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sample Salary Sheet"
+    
+    # Add title row
+    ws.merge_cells('A1:F1')
+    ws['A1'] = f"{company_name} - Sample Salary Template"
+    ws['A1'].font = Font(bold=True, size=14)
+    ws['A1'].alignment = Alignment(horizontal="center", vertical="center")
+    
+    # Add instructions row
+    ws.merge_cells('A2:F2')
+    ws['A2'] = "This is a sample file with example data. Replace with your real employee data."
+    ws['A2'].font = Font(italic=True)
+    ws['A2'].alignment = Alignment(horizontal="center", vertical="center")
+    
+    # Add headers
+    header_row = 3
+    for col_idx, column in enumerate(columns, start=1):
+        cell = ws.cell(row=header_row, column=col_idx, value=column)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+        
+        # Set column width based on column name length
+        ws.column_dimensions[chr(64 + col_idx)].width = max(len(column) + 5, 15)
+    
+    # Add sample data rows
+    sample_data = [
+        {
+            "EMP ID": "EMP001",
+            "Name of Employees": "John Doe",
+            "Email": "john.doe@example.com",
+            "Designation": "Manager",
+            "Name of Site": "Main Branch",
+            "Basic Pay": 50000,
+            "HRA": 15000,
+            "DA": 5000,
+            "Special Allowance": 8000,
+            "Gross Amt": 78000,
+            "PF": 6000,
+            "TDS": 5500,
+            "Net Amt": 66500
+        },
+        {
+            "EMP ID": "EMP002",
+            "Name of Employees": "Jane Smith",
+            "Email": "jane.smith@example.com",
+            "Designation": "Developer",
+            "Name of Site": "Tech Center",
+            "Basic Pay": 45000,
+            "HRA": 13500,
+            "DA": 4500,
+            "Special Allowance": 7000,
+            "Gross Amt": 70000,
+            "PF": 5400,
+            "TDS": 4900,
+            "Net Amt": 59700
+        }
+    ]
+    
+    # Fill in sample data
+    for idx, data in enumerate(sample_data):
+        row_idx = header_row + idx + 1
+        for col_idx, column in enumerate(columns, start=1):
+            value = data.get(column, "")
+            ws.cell(row=row_idx, column=col_idx, value=value)
+    
+    # Save to stream
+    output = BytesIO()
+    wb.save(output)
     output.seek(0)
     return output
 
@@ -57,13 +153,37 @@ def create_excel_from_employees_with_formulas(employees, columns, company_name, 
     
     # Create a DataFrame with only the specified columns in the correct order
     data = []
+    
+    # Identify which columns need formulas
+    formula_columns = set()
+    if formula_mapping:
+        formula_columns = {col.lower() for col in formula_mapping.keys()}
+    
+    # Specified input-only columns based on your example
+    # This is inferred from your comment about "this columns only have data rest are empty"
+    input_only_columns = {
+        "name of employees", "email", "designation", "name of site", 
+        "no. of days in a month", "no. of days present", "basic pay", 
+        "hra", "conv allow/ vehicle reimb", "child education allow", 
+        "lta monthly", "medical monthly", "attire reimb", "sp.all", "other allow"
+    }
+    
     for emp in employees:
         row = {}
         for col in columns:
-            # Case-insensitive key lookup
             col_lower = col.lower()
+            
+            # Case-insensitive key lookup
             matching_keys = [k for k in emp.keys() if k.lower() == col_lower]
-            row[col] = emp[matching_keys[0]] if matching_keys else None
+            
+            # Only include data for input columns or columns that don't have formulas
+            if col_lower in input_only_columns or col_lower not in formula_columns:
+                row[col] = emp[matching_keys[0]] if matching_keys else None
+            else:
+                # For formula columns, set to None in the DataFrame
+                # This ensures we won't overwrite formulas with static values
+                row[col] = None
+                
         data.append(row)
     
     df = pd.DataFrame(data, columns=columns)
@@ -75,7 +195,7 @@ def create_excel_from_employees_with_formulas(employees, columns, company_name, 
         current_date = datetime.now()
         month_year = f"{calendar.month_name[current_date.month]}- {str(current_date.year)[2:]}"
         
-        # Write to excel but starting from row 3 to leave space for the header
+        # Write to excel starting from row 3 to leave space for the header
         df.to_excel(writer, index=False, startrow=2)
         
         # Get the worksheet
@@ -120,7 +240,7 @@ def create_excel_from_employees_with_formulas(employees, columns, company_name, 
             
             worksheet.column_dimensions[cell.column_letter].width = max(15, max_length + 2)
         
-        # Apply formulas if formula_mapping is provided
+        # Apply formulas
         if formula_mapping:
             for row_idx in range(4, len(df) + 4):  # +4 because data starts at row 4
                 for col_name, formula_template in formula_mapping.items():
@@ -139,197 +259,52 @@ def create_excel_from_employees_with_formulas(employees, columns, company_name, 
                         cell = worksheet.cell(row=row_idx, column=col_idx)
                         cell.value = formula
                         cell.data_type = 'f'  # Set as formula
+                        
+        # Add total row at the bottom
+        total_row_idx = len(df) + 4
+        worksheet.cell(row=total_row_idx, column=1).value = "TOTAL"
+        worksheet.cell(row=total_row_idx, column=1).font = Font(bold=True)
+        
+        # Add SUM formulas for numerical columns
+        for idx, col in enumerate(columns, 1):
+            col_lower = col.lower()
+            if any(term in col_lower for term in ["amount", "pay", "amt", "basic", "hra", "conv", "reimb", "allow"]):
+                col_letter = worksheet.cell(row=3, column=idx).column_letter
+                cell = worksheet.cell(row=total_row_idx, column=idx)
+                start_cell = f"{col_letter}4"
+                end_cell = f"{col_letter}{total_row_idx-1}"
+                cell.value = f"=SUM({start_cell}:{end_cell})"
+                cell.font = Font(bold=True)
+                cell.number_format = "#,##0.00"
     
     output.seek(0)
     return output
 
-def generate_sample_template(columns, company_name):
-    """
-    Generate a sample Excel template with example data to demonstrate the correct format.
-    
-    Args:
-        columns: List of column names
-        company_name: Name of the company
-        
-    Returns:
-        BytesIO stream containing the Excel file
-    """
-    import pandas as pd
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-    from io import BytesIO
-    from datetime import datetime
-    import calendar
-    
-    # Create sample data for the template
-    sample_data = []
-    
-    # Define some sample values for common columns
-    sample_values = {
-        "sr. no.": [1, 2, 3],
-        "emp id": ["EMP001", "EMP002", "EMP003"],
-        "name of employees": ["John Doe", "Jane Smith", "Alex Johnson"],
-        "email": ["john@example.com", "jane@example.com", "alex@example.com"],
-        "designation": ["Software Engineer", "HR Manager", "Project Manager"],
-        "name of site": ["Main Office", "Branch Office", "Remote"],
-        "no. of days in a month": [30, 30, 30],
-        "no. of days present": [22, 21, 20],
-        "basic pay": [30000, 40000, 50000],
-        "hra": [15000, 20000, 25000],
-        "conv allow/ vehicle reimb": [3000, 3500, 4000],
-        "child education allow": [2000, 2000, 2000],
-        "lta monthly": [2500, 3000, 3500],
-        "medical monthly": [1250, 1500, 1750],
-        "attire reimb": [1000, 1000, 1000],
-        "sp.all": [2000, 2500, 3000],
-        "other allow": [1000, 1200, 1500],
-        "gross amount": [57750, 74700, 91750],
-        "prof. tax": [200, 200, 200],
-        "esic": [0, 0, 0],
-        "p. f. cont.": [1800, 1800, 1800],
-        "tds": [4000, 6000, 8000],
-        "advance/ other deductions": [0, 0, 0],
-        "total ded": [6000, 8000, 10000],
-        "net amt": [51750, 66700, 81750],
-        "other reimbursements": [0, 0, 0],
-        "pf on arrears": [0, 0, 0],
-        "bonus": [0, 0, 0],
-        "other": [0, 0, 0],
-        "payable": [51750, 66700, 81750]
-    }
-    
-    # Create 3 sample records
-    for i in range(3):
-        record = {}
-        for col in columns:
-            col_lower = col.lower()
-            # Try to find a matching sample value
-            found = False
-            for key, values in sample_values.items():
-                if key in col_lower or col_lower in key:
-                    record[col] = values[i]
-                    found = True
-                    break
+def apply_formulas_to_row(worksheet, row_idx, formula_mapping, columns):
+    """Apply Excel formulas to a specific row."""
+    for col_idx, column in enumerate(columns, start=1):
+        if column in formula_mapping:
+            formula = formula_mapping[column]
+            # Replace {row} template with actual row number
+            formula = formula.replace("{row}", str(row_idx))
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            cell.value = formula
             
-            # If no match found, use a default value
-            if not found:
-                if "amount" in col_lower or "pay" in col_lower or "amt" in col_lower:
-                    record[col] = 1000 * (i + 1)
-                elif "date" in col_lower:
-                    record[col] = f"2023-05-{15 + i}"
-                elif "name" in col_lower:
-                    record[col] = f"Sample Name {i+1}"
-                elif "id" in col_lower:
-                    record[col] = f"ID{100 + i}"
-                else:
-                    record[col] = f"Sample {i+1}"
-        
-        sample_data.append(record)
+def add_table_styling(worksheet, header_row, rows_count, cols_count):
+    """Add borders and styling to make the data look like a table."""
+    thin_border = Border(
+        left=Side(style='thin'), 
+        right=Side(style='thin'), 
+        top=Side(style='thin'), 
+        bottom=Side(style='thin')
+    )
     
-    # Create DataFrame with sample data
-    df = pd.DataFrame(sample_data)
-    
-    # Create Excel file
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # Add current date
-        current_date = datetime.now()
-        month_year = f"{calendar.month_name[current_date.month]}- {str(current_date.year)[2:]}"
-        
-        # Create the Excel workbook
-        workbook = writer.book
-        
-        # Add a sheet for instructions
-        instructions = workbook.create_sheet("Instructions", 0)
-        instructions.column_dimensions['A'].width = 100
-        
-        # Add instructions
-        instructions['A1'] = "HOW TO USE THIS TEMPLATE"
-        instructions['A1'].font = Font(bold=True, size=14)
-        
-        instructions['A3'] = "1. This is a SAMPLE template showing the required format for your salary sheet."
-        instructions['A4'] = "2. The sheet 'Sample Data' shows what your data should look like."
-        instructions['A5'] = "3. Use the 'Template' sheet to enter your actual employee data."
-        instructions['A6'] = "4. IMPORTANT: Do not change the column headers or their order."
-        instructions['A7'] = "5. The first row must contain the company name and month."
-        instructions['A8'] = "6. The third row must contain the column headers exactly as shown."
-        instructions['A9'] = "7. Data should start from the fourth row."
-        instructions['A10'] = "8. When uploading, ensure all required columns have data."
-        
-        # Create a sample data sheet
-        df.to_excel(writer, sheet_name='Sample Data', index=False, startrow=2)
-        sample_sheet = writer.sheets['Sample Data']
-        
-        # Add company name and month in the sample sheet
-        sample_sheet.merge_cells('A1:D1')
-        cell = sample_sheet.cell(row=1, column=1)
-        cell.value = f"{company_name} SALARY SHEET"
-        cell.font = Font(bold=True, size=14)
-        cell.alignment = Alignment(horizontal='left')
-        
-        # Add month-year
-        sample_sheet.merge_cells('E1:G1')
-        cell = sample_sheet.cell(row=1, column=5)
-        cell.value = month_year
-        cell.font = Font(bold=True, size=12)
-        cell.alignment = Alignment(horizontal='left')
-        
-        # Style the header row
-        for idx, col in enumerate(columns, 1):
-            cell = sample_sheet.cell(row=3, column=idx)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal='center')
-            cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
+    # Apply borders to all data cells
+    for row in range(header_row, header_row + rows_count + 1):
+        for col in range(1, cols_count + 1):
+            worksheet.cell(row=row, column=col).border = thin_border
             
-            # Add a border
-            thin_border = Border(
-                left=Side(style='thin'), 
-                right=Side(style='thin'), 
-                top=Side(style='thin'), 
-                bottom=Side(style='thin')
-            )
-            cell.border = thin_border
-            
-            # Set column width
-            sample_sheet.column_dimensions[cell.column_letter].width = max(15, len(col) + 2)
-        
-        # Add an empty template sheet
-        empty_df = pd.DataFrame(columns=columns)
-        empty_df.to_excel(writer, sheet_name='Template', index=False, startrow=2)
-        template_sheet = writer.sheets['Template']
-        
-        # Add company name and month in the template sheet
-        template_sheet.merge_cells('A1:D1')
-        cell = template_sheet.cell(row=1, column=1)
-        cell.value = f"{company_name} SALARY SHEET"
-        cell.font = Font(bold=True, size=14)
-        cell.alignment = Alignment(horizontal='left')
-        
-        # Add month-year
-        template_sheet.merge_cells('E1:G1')
-        cell = template_sheet.cell(row=1, column=5)
-        cell.value = month_year
-        cell.font = Font(bold=True, size=12)
-        cell.alignment = Alignment(horizontal='left')
-        
-        # Style the header row in template sheet
-        for idx, col in enumerate(columns, 1):
-            cell = template_sheet.cell(row=3, column=idx)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal='center')
-            cell.fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
-            
-            # Add a border
-            thin_border = Border(
-                left=Side(style='thin'), 
-                right=Side(style='thin'), 
-                top=Side(style='thin'), 
-                bottom=Side(style='thin')
-            )
-            cell.border = thin_border
-            
-            # Set column width
-            template_sheet.column_dimensions[cell.column_letter].width = max(15, len(col) + 2)
-    
-    output.seek(0)
-    return output
+            # Center-align numbers for better readability
+            cell = worksheet.cell(row=row, column=col)
+            if isinstance(cell.value, (int, float)):
+                cell.alignment = Alignment(horizontal="right")
