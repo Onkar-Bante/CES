@@ -3,107 +3,55 @@ import pandas as pd
 from io import BytesIO
 from fastapi import UploadFile, HTTPException
 
-async def extract_columns_from_excel(file: UploadFile) -> list:
-    """
-    Extract column names from an Excel file, with improved header detection.
-    
-    Args:
-        file: Uploaded Excel file
-        
-    Returns:
-        List of column names
-    """
+async def extract_columns_from_excel(file: UploadFile, header_row_index: int = None) -> dict:
     try:
-        # Read the excel file
         contents = await file.read()
-        file.file.seek(0)  # Reset file pointer for potential further use
-        
-        # Create a BytesIO object
+        file.file.seek(0)
         excel_file = BytesIO(contents)
-        
-        # Read first few rows to inspect content
-        df_preview = pd.read_excel(excel_file, header=None, nrows=10)
-        excel_file.seek(0)
-        
-        # Look for a row with standard salary sheet headers
-        # Common indicators in salary sheet headers
+
         indicators = ["sr", "emp", "id", "name", "email", "basic", "hra", "gross", "net", "tax", "deduction"]
         
-        header_row_idx = None
-        best_match_count = 0
-        
-        # Check each row for potential headers
-        for i in range(min(10, len(df_preview))):
-            row = df_preview.iloc[i].astype(str)
-            # Convert to string and lowercase for comparison
-            row_text = " ".join(row.str.lower())
-            
-            # Count how many indicators appear in this row
-            match_count = sum(1 for ind in indicators if ind in row_text)
-            
-            if match_count > best_match_count:
-                best_match_count = match_count
-                header_row_idx = i
-        
-        # If we found a good header row
-        if header_row_idx is not None and best_match_count >= 3:
-            # Use this row as header
-            df = pd.read_excel(excel_file, header=header_row_idx)
-            
-            # Clean up column names
-            columns = []
-            for col in df.columns:
-                if pd.isna(col) or "unnamed" in str(col).lower():
-                    columns.append(f"Column_{len(columns)+1}")
-                else:
-                    columns.append(str(col).strip())
-            
-            return columns
-        
-        # If no good header row found, try the most common locations (row 3)
-        excel_file.seek(0)
-        try:
-            df = pd.read_excel(excel_file, header=2)  # Row 3 (index 2) is common for headers
-            columns = []
-            for col in df.columns:
-                if pd.isna(col) or "unnamed" in str(col).lower():
-                    columns.append(f"Column_{len(columns)+1}")
-                else:
-                    columns.append(str(col).strip())
-            
-            if any(ind in " ".join(col.lower() for col in columns) for ind in indicators):
-                return columns
-        except:
-            pass
-        
-        # Last resort - try reading with openpyxl to get more detailed cell information
-        from openpyxl import load_workbook
-        
-        excel_file.seek(0)
-        wb = load_workbook(filename=excel_file)
-        ws = wb.active
-        
-        # Try row 3 (common for salary sheets with titles)
-        header_row = []
-        for cell in ws[3]:
-            val = cell.value
-            if val is not None:
-                header_row.append(str(val).strip())
-            else:
-                header_row.append(f"Column_{len(header_row)+1}")
-        
-        if header_row and len(header_row) > 5:  # At least 5 columns
-            return header_row
-            
-        # If all else fails
-        raise HTTPException(
-            status_code=400, 
-            detail="Could not identify proper column headers. Please ensure your Excel file has headers in one of the first 10 rows."
-        )
-    
+        if header_row_index is not None:
+            df = pd.read_excel(excel_file, header=header_row_index)
+            cleaned_columns = clean_columns(df.columns)
+            return {"columns": cleaned_columns, "header_row_index": header_row_index}
+
+        preview_df = pd.read_excel(excel_file, header=None, nrows=10)
+        candidates = []
+
+        for i in range(len(preview_df)):
+            row = preview_df.iloc[i]
+            row_strs = row.fillna("").astype(str).str.lower()
+            keyword_matches = sum(1 for cell in row_strs if any(ind in cell for ind in indicators))
+            non_empty_cells = sum(1 for cell in row_strs if cell.strip() and "unnamed" not in cell)
+
+            if keyword_matches >= 3 and non_empty_cells >= len(row) * 0.5:
+                candidates.append((i, keyword_matches))
+
+        if candidates:
+            best_row = max(candidates, key=lambda x: x[1])[0]
+            file.file.seek(0)
+            df = pd.read_excel(file.file, header=best_row)
+            cleaned_columns = clean_columns(df.columns)
+            return {"columns": cleaned_columns, "header_row_index": best_row}
+
+        # Fallback to row 3
+        file.file.seek(0)
+        df = pd.read_excel(file.file, header=2)
+        cleaned_columns = clean_columns(df.columns)
+        return {"columns": cleaned_columns, "header_row_index": 2}
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing Excel file: {str(e)}")
-    
+        raise HTTPException(status_code=400, detail=f"Failed to extract headers: {str(e)}")
+
+def clean_columns(columns):
+    cleaned = []
+    for i, col in enumerate(columns):
+        if pd.isna(col) or "unnamed" in str(col).lower():
+            cleaned.append(f"Column_{i+1}")
+        else:
+            cleaned.append(str(col).strip())  # Already strips leading/trailing spaces
+    return cleaned
 
     
 async def extract_formulas_from_excel(file: UploadFile, header_row_index=2) -> dict:

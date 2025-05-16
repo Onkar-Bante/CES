@@ -7,21 +7,11 @@ from datetime import datetime
 import calendar
 
 def validate_excel_columns(actual_cols, expected_cols):
-    # Case-insensitive comparison of column names
-    actual_lower = [col.lower() for col in actual_cols]
-    expected_lower = [col.lower() for col in expected_cols]
-    
-    # Check if all expected columns are present
-    for col in expected_lower:
-        if col not in actual_lower:
-            return False
-    
-    # Check if no extra columns are present
-    for col in actual_lower:
-        if col not in expected_lower:
-            return False
-    
-    return True
+    def norm(c): return c.strip().lower()
+    actual_norm = [norm(c) for c in actual_cols]
+    expected_norm = [norm(c) for c in expected_cols]
+    return set(actual_norm) == set(expected_norm)
+
 
 def generate_excel_template(columns):
     df = pd.DataFrame(columns=columns)
