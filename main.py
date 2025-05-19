@@ -7,8 +7,17 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from routers import company_router, employee_router, attendance_router, test_router
 import math
 import json
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Dynamic Company & Employee Management")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust as needed for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Custom JSON encoder for handling NaN values
 class CustomJSONEncoder(json.JSONEncoder):
