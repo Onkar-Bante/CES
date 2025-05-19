@@ -97,11 +97,23 @@ async def upload_employees(company_id: str, file):
 
         sanitized_email_col = sanitize_field_name(email_col)
 
+        # Columns to exclude from employee collection
+        attendance_columns = [
+            "no. of days in a month",
+            "no. of days present"
+        ]
+        attendance_columns_normalized = [sanitize_field_name(col) for col in attendance_columns]
+
         for _, row in df.iterrows():
             sanitized_employee = {}
             for col in columns:
+                norm_col = sanitize_field_name(col)
+                if norm_col in attendance_columns_normalized:
+                    continue  # Skip attendance columns
                 if col in row:
-                    sanitized_employee[sanitize_field_name(col)] = row[col]
+                    sanitized_employee[norm_col] = row[col]
+            sanitized_employee["company_id"] = company_id
+            ...
 
             sanitized_employee["company_id"] = company_id
 

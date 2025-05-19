@@ -145,11 +145,12 @@ def create_excel_from_employees_with_formulas(employees, columns, company_name, 
         BytesIO containing the Excel file
     """
     import pandas as pd
-    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from io import BytesIO
     from datetime import datetime
     import calendar
+    import re
     
     # Create a DataFrame with only the specified columns in the correct order
     data = []
@@ -168,23 +169,29 @@ def create_excel_from_employees_with_formulas(employees, columns, company_name, 
         "lta monthly", "medical monthly", "attire reimb", "sp.all", "other allow"
     }
     
+    def normalize_key(key: str) -> str:
+        import re
+        key = re.sub(r'\s+', ' ', key)  # Replace all whitespace with single space
+        key = key.replace('\n', ' ').replace('\r', ' ')
+        key = key.strip().lower()
+        key = re.sub(r'[\s\./\\-]+', '_', key)  # Replace space, dot, slash, backslash, dash with underscore
+        key = re.sub(r'_+', '_', key)           # Replace multiple underscores with one
+        key = re.sub(r'[^a-z0-9_]', '', key)    # Remove all non-alphanumeric except underscore
+        return key
+
     for emp in employees:
+        # Normalize employee keys for lookup
+        normalized_emp = {normalize_key(k): v for k, v in emp.items()}
         row = {}
         for col in columns:
-            col_lower = col.lower()
-            
-            # Case-insensitive key lookup
-            matching_keys = [k for k in emp.keys() if k.lower() == col_lower]
-            
-            # Only include data for input columns or columns that don't have formulas
-            if col_lower in input_only_columns or col_lower not in formula_columns:
-                row[col] = emp[matching_keys[0]] if matching_keys else None
-            else:
-                # For formula columns, set to None in the DataFrame
-                # This ensures we won't overwrite formulas with static values
+            col_norm = normalize_key(col)
+            if col_norm in formula_columns:
                 row[col] = None
-                
+            else:
+                row[col] = normalized_emp.get(col_norm, None)
         data.append(row)
+        # print(normalized_emp.keys())
+        # print([normalize_key(col) for col in columns])
     
     df = pd.DataFrame(data, columns=columns)
     
@@ -238,7 +245,8 @@ def create_excel_from_employees_with_formulas(employees, columns, company_name, 
                 if cell_value:
                     max_length = max(max_length, len(str(cell_value)))
             
-            worksheet.column_dimensions[cell.column_letter].width = max(15, max_length + 2)
+            col_letter = get_column_letter(idx)
+            worksheet.column_dimensions[col_letter].width = max(15, max_length + 2)
         
         # Apply formulas
         if formula_mapping:
