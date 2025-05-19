@@ -14,3 +14,6 @@ def get_company_collection():
 
 def get_employee_collection():
     return db["employees"]
+
+def get_attendance_collection():
+    return db["attendance"]

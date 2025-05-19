@@ -12,6 +12,7 @@ from services.employee_service import (
 from models.employee import EmployeeCreate, EmployeeUpdate
 from typing import Dict, Any, List, Optional
 from fastapi.responses import StreamingResponse
+from datetime import datetime
 
 router = APIRouter()
 
@@ -82,7 +83,9 @@ async def api_export_employees(
     basic_pay_gte: Optional[float] = None,
     basic_pay_lte: Optional[float] = None,
     net_amt_gte: Optional[float] = None,
-    net_amt_lte: Optional[float] = None
+    net_amt_lte: Optional[float] = None,
+    year: Optional[int] = None,
+    month: Optional[int] = None
 ):
     # Convert query params to a filters dict
     filters = {
@@ -101,11 +104,21 @@ async def api_export_employees(
     # Remove None values
     filters = {k: v for k, v in filters.items() if v is not None}
     
-    file_stream = await export_employees(company_id, filters)
+    # If year and month not provided, use current date
+    if year is None or month is None:
+        current_date = datetime.now()
+        year = year or current_date.year
+        month = month or current_date.month
+    
+    file_stream = await export_employees(company_id, filters, year, month)
+    
+    # Include month and year in the filename
+    month_name = datetime(year, month, 1).strftime("%B")
+    
     return StreamingResponse(
         file_stream,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=employees_{company_id}.xlsx"}
+        headers={"Content-Disposition": f"attachment; filename=employees_{company_id}_{month_name}_{year}.xlsx"}
     )
 
 @router.get("/download_sample_template/{company_id}")

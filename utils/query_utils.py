@@ -3,55 +3,92 @@
 from typing import Dict, Any
 import math
 
-def build_query_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
+def build_query_filters(filters):
     """
-    Convert user-friendly filter parameters to MongoDB query syntax.
-    
-    Args:
-        filters: Dictionary of filter parameters
-        
-    Returns:
-        Dictionary with MongoDB query operators
+    Builds MongoDB query filters from filter parameters.
+    Handles special cases for text search and comparison operators.
     """
-    mongo_query = {}
+    mongo_filters = {}
     
-    # Handle text search separately if present
+    # Handle full-text search (applied across multiple fields)
     if "text_search" in filters and filters["text_search"]:
-        mongo_query["$text"] = {"$search": filters["text_search"]}
-        filters.pop("text_search")
+        # MongoDB $text search requires a text index
+        # As an alternative, we'll implement a simple regex search across common fields
+        search_term = filters.pop("text_search")
+        search_regex = {"$regex": search_term, "$options": "i"}
+        
+        mongo_filters["$or"] = [
+            {"name_of_employees": search_regex},
+            {"email": search_regex},
+            {"emp_id": search_regex},
+            {"designation": search_regex},
+            {"name_of_site": search_regex}
+        ]
     
-    # Process the rest of the filters
+    # Process the remaining filters
     for key, value in filters.items():
-        # Skip None values and NaN values
-        if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
+        # Skip empty filters
+        if value is None:
             continue
-            
+        
+        # Handle contains operator (case-insensitive)
         if key.endswith("_contains"):
-            # Handle contains operator (case insensitive substring match)
-            field_name = key.replace("_contains", "")
-            mongo_query[field_name] = {"$regex": value, "$options": "i"}
-        
+            base_field = key.replace("_contains", "")
+            mongo_filters[base_field] = {"$regex": value, "$options": "i"}
+            
+        # Handle greater than or equal
         elif key.endswith("_gte"):
-            # Handle greater than or equal operator
-            field_name = key.replace("_gte", "")
-            if field_name in mongo_query:
-                mongo_query[field_name]["$gte"] = value
-            else:
-                mongo_query[field_name] = {"$gte": value}
-        
+            base_field = key.replace("_gte", "")
+            if base_field not in mongo_filters:
+                mongo_filters[base_field] = {}
+            mongo_filters[base_field]["$gte"] = value
+            
+        # Handle less than or equal
         elif key.endswith("_lte"):
-            # Handle less than or equal operator
-            field_name = key.replace("_lte", "")
-            if field_name in mongo_query:
-                mongo_query[field_name]["$lte"] = value
-            else:
-                mongo_query[field_name] = {"$lte": value}
-        
+            base_field = key.replace("_lte", "")
+            if base_field not in mongo_filters:
+                mongo_filters[base_field] = {}
+            mongo_filters[base_field]["$lte"] = value
+            
+        # Handle exact match (case-sensitive)
         else:
-            # Handle exact match
-            mongo_query[key] = value
+            mongo_filters[key] = value
     
-    return mongo_query
+    return mongo_filters
+
+def build_attendance_query_filters(filters):
+    """
+    Builds MongoDB query filters specifically for attendance records.
+    Handles date ranges and attendance statuses.
+    """
+    mongo_filters = {}
+    
+    # Process company_id and employee_id directly
+    if "company_id" in filters:
+        mongo_filters["company_id"] = filters["company_id"]
+    
+    if "employee_id" in filters:
+        mongo_filters["employee_id"] = filters["employee_id"]
+    
+    # Handle date range filters
+    if "start_date" in filters and filters["start_date"]:
+        start_date = filters["start_date"].isoformat()
+        if "date" not in mongo_filters:
+            mongo_filters["date"] = {}
+        mongo_filters["date"]["$gte"] = start_date
+    
+    if "end_date" in filters and filters["end_date"]:
+        end_date = filters["end_date"].isoformat()
+        if "date" not in mongo_filters:
+            mongo_filters["date"] = {}
+        mongo_filters["date"]["$lte"] = end_date
+    
+    # Handle status filter (exact match)
+    if "status" in filters and filters["status"]:
+        mongo_filters["status"] = filters["status"]
+    
+    return mongo_filters
+
 
 def try_convert_numeric(value: Any) -> Any:
     """

@@ -10,7 +10,8 @@ from utils.excel_utils import validate_excel_columns, create_excel_from_employee
 from utils.query_utils import build_query_filters
 from models.employee import EmployeeCreate, EmployeeUpdate
 from typing import Dict, Any, List, Optional
-from io import BytesIO
+from datetime import datetime
+import calendar
 
 class JSONEncoder(json.JSONEncoder):
     """Custom JSON encoder to handle NaN, Infinity, and -Infinity values."""
@@ -267,17 +268,25 @@ async def delete_employee(company_id: str, employee_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def export_employees(company_id: str, filters: Optional[Dict[str, Any]] = None):
+async def export_employees(company_id: str, filters: Optional[Dict[str, Any]] = None, year: int = None, month: int = None):
     """
-    Export employees to Excel with properly maintained formulas.
+    Export employees to Excel with properly maintained formulas and attendance data.
     
     Args:
         company_id: ID of the company
         filters: Optional filters to apply to the query
+        year: Year for attendance data (current year if None)
+        month: Month for attendance data (current month if None)
         
     Returns:
         BytesIO stream containing the Excel file
     """
+    # If year/month not provided, use current date
+    if year is None or month is None:
+        current_date = datetime.now()
+        year = year or current_date.year
+        month = month or current_date.month
+    
     # Validate company exists
     company = await get_company_collection().find_one({"_id": ObjectId(company_id)})
     if not company:
@@ -292,6 +301,18 @@ async def export_employees(company_id: str, filters: Optional[Dict[str, Any]] = 
     
     # Get columns from company
     columns = company.get("salary_sheet_columns", [])
+    
+    # Add attendance columns
+    attendance_columns = [
+        f"Attendance ({datetime(year, month, 1).strftime('%B %Y')})",
+        "Total Days",
+        "Days Present",
+        "Days Absent",
+        "Half Days",
+        "Leaves"
+    ]
+    
+    all_columns = columns + attendance_columns
     
     # Get formula mapping if available
     formula_mapping = company.get("salary_sheet_formulas", {})
@@ -370,14 +391,42 @@ async def export_employees(company_id: str, filters: Optional[Dict[str, Any]] = 
     # Clean NaN values
     employees = clean_nan_values(employees)
     
-    # Import the column letter function
+    # Import necessary functions
     from openpyxl.utils import get_column_letter
+    from services.attendance_service import get_employee_attendance_for_export
+    
+    # Add attendance data to each employee
+    for employee in employees:
+        try:
+            attendance_data = await get_employee_attendance_for_export(
+                company_id, 
+                str(employee["_id"]), 
+                year, 
+                month
+            )
+            
+            # Add attendance fields to employee data
+            employee["Attendance"] = f"{attendance_data['month']} {attendance_data['year']}"
+            employee["Total Days"] = attendance_data["total_days"]
+            employee["Days Present"] = attendance_data["present_days"]
+            employee["Days Absent"] = attendance_data["absent_days"]
+            employee["Half Days"] = attendance_data["half_days"]
+            employee["Leaves"] = attendance_data["leaves"]
+            
+        except Exception as e:
+            # If attendance data can't be retrieved, add default values
+            employee["Attendance"] = f"{datetime(year, month, 1).strftime('%B %Y')}"
+            employee["Total Days"] = calendar.monthrange(year, month)[1]
+            employee["Days Present"] = 0
+            employee["Days Absent"] = 0
+            employee["Half Days"] = 0
+            employee["Leaves"] = 0
     
     # Generate Excel with the company's format and formulas
     try:
         file_stream = create_excel_from_employees_with_formulas(
             employees, 
-            columns, 
+            all_columns, 
             company["name"],
             formula_mapping
         )

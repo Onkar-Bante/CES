@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from models.company import CompanyCreate, CompanyUpdateSalaryFormat
 from services.company_service import create_company, update_salary_format, extract_and_update_salary_format
-from utils.excel_utils import generate_excel_template
+from utils.excel_utils import generate_sample_template
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 from bson.objectid import ObjectId
@@ -110,7 +110,7 @@ async def generate_template(company_id: str):
         raise HTTPException(status_code=404, detail="Company not found")
 
     columns = company["salary_sheet_columns"]
-    file_stream = generate_excel_template(columns)
+    file_stream = generate_sample_template(columns)
 
     return StreamingResponse(
         file_stream,

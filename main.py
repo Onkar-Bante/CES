@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from routers import company_router, employee_router, test_router
+from routers import company_router, employee_router, attendance_router, test_router
 import math
 import json
 
@@ -30,9 +30,10 @@ async def value_error_handler(request: Request, exc: ValueError):
     # For other ValueError exceptions, re-raise
     raise exc
 
-# Include your routers as before
+# Include your routers
 app.include_router(company_router.router)
 app.include_router(employee_router.router)
+app.include_router(attendance_router.router)
 app.include_router(test_router.router)
 
 @app.get("/")
